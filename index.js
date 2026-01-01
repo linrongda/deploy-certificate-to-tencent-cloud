@@ -9,7 +9,7 @@ Inputs (action.yml):
 - secret-key (required)
 - fullchain-file (required)
 - key-file (required)
-- cdn-domains (required)
+- domains (required)
 */
 
 const input = {
@@ -17,8 +17,40 @@ const input = {
   secretKey: core.getInput('secret-key', { required: true }),
   fullchainFile: core.getInput('fullchain-file', { required: true }),
   keyFile: core.getInput('key-file', { required: true }),
-  cdnDomains: core.getInput('cdn-domains', { required: true }),
+  domains: core.getInput('domains', { required: true }),
 };
+
+// Parse `domains` input into cdn domains and eo entries (zone -> domains)
+// Format: multi-line text, tokens separated by whitespace. Lines starting with `zone-` are treated as EO entries.
+function parseDomains(text) {
+  const cdn = [];
+  const eoMap = {}; // zoneId -> Set(domains)
+
+  if (!text) return { cdn, eoMap };
+
+  const lines = text.split(/\r?\n/);
+  for (const line of lines) {
+    const t = line.trim();
+    if (!t) continue;
+    const tokens = t.split(/\s+/).filter(Boolean);
+    if (tokens.length === 0) continue;
+
+    if (tokens[0].startsWith('zone-')) {
+      const zoneId = tokens[0];
+      const domains = tokens.slice(1);
+      if (!eoMap[zoneId]) eoMap[zoneId] = new Set();
+      for (const d of domains) eoMap[zoneId].add(d);
+    } else {
+      for (const d of tokens) cdn.push(d);
+    }
+  }
+
+  for (const k of Object.keys(eoMap)) {
+    eoMap[k] = Array.from(eoMap[k]);
+  }
+
+  return { cdn, eoMap };
+}
 
 function readFile(path) {
   try {
@@ -246,21 +278,87 @@ async function deleteCertificates(certIds) {
   core.endGroup();
 }
 
+async function queryEoDomainCerts(eoEntries) {
+  core.startGroup('Querying EdgeOne domain certificate bindings...');
+  const found = new Set();
+
+  const TEOClient = tencentcloud.teo.v20220901.Client;
+  const teoClient = new TEOClient({
+    ...sharedClientConfig,
+    profile: { httpProfile: { endpoint: 'teo.tencentcloudapi.com' } },
+  });
+
+  try {
+    for (const entry of eoEntries) {
+      const zoneId = entry.zoneId;
+      const domains = entry.domains || [];
+      if (!zoneId || domains.length === 0) continue;
+
+      core.info(`Querying DescribeAccelerationDomains for zone ${zoneId} (${domains.length} domains)`);
+
+      const params = {
+        ZoneId: zoneId,
+        Filters: [
+          {
+            Name: 'domain-name',
+            Value: domains,
+          },
+        ],
+      };
+
+      const resp = await teoClient.DescribeAccelerationDomains(params);
+      core.info('Success: DescribeAccelerationDomains');
+      core.info(JSON.stringify(resp));
+
+      const accs = resp?.AccelerationDomains || [];
+      for (const d of accs) {
+        const name = d.DomainName || d.Domain || null;
+        if (!name) continue;
+        if (!domains.includes(name)) continue;
+        const certList = d.Certificate?.List || [];
+        for (const c of certList) if (c.CertId) found.add(c.CertId);
+      }
+    }
+  } catch (err) {
+    core.error(err.stack || err.message || err);
+    core.setFailed(err.message || String(err));
+    throw err;
+  } finally {
+    core.info('EdgeOne-related old certificate ids: ' + JSON.stringify(Array.from(found)));
+    core.endGroup();
+  }
+
+  return Array.from(found);
+}
+
 async function main() {
   try {
     const certPem = readFile(input.fullchainFile);
     const keyPem = readFile(input.keyFile);
 
     const certId = await uploadCertificate(certPem, keyPem);
-    const domains = Array.from(new Set(input.cdnDomains.split(/\s+/).filter((x) => x)));
-    const domainCerts = await queryCdnDomainCerts(domains);
-    const oldCertIds = Array.from(new Set(domainCerts.map((x) => x.certId).filter(Boolean)));
 
-    for (const oldCertId of oldCertIds) {
-      await updateCert(oldCertId, certId);
+    // Parse domains input into CDN domains and EdgeOne zone entries
+    const parsed = parseDomains(input.domains);
+    const cdnDomains = Array.from(new Set(parsed.cdn));
+    const eoEntries = Object.keys(parsed.eoMap).map((zoneId) => ({ zoneId, domains: parsed.eoMap[zoneId].slice() }));
+
+    const domainCerts = cdnDomains.length > 0 ? await queryCdnDomainCerts(cdnDomains) : [];
+    const oldCdnCertIds = Array.from(new Set(domainCerts.map((x) => x.certId).filter(Boolean)));
+    const oldEoCertIds = eoEntries.length > 0 ? await queryEoDomainCerts(eoEntries) : [];
+    const allOldIds = Array.from(new Set([...oldCdnCertIds, ...oldEoCertIds]));
+
+    if (allOldIds.length === 0) {
+      core.info('No existing certificate bindings found for CDN or EdgeOne domains.');
+    } else {
+      for (const oldCertId of allOldIds) {
+        await updateCert(oldCertId, certId);
+      }
+
+      core.info('Waiting 1 minute before deleting old certificates...');
+      await new Promise((resolve) => setTimeout(resolve, 1000 * 60));
+      await deleteCertificates(allOldIds);
     }
-    await new Promise((resolve) => setTimeout(resolve, 1000*60));
-    await deleteCertificates(oldCertIds);
 
   } catch (e) {
     core.error(e.stack || e.message || e);

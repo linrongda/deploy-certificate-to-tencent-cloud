@@ -1,9 +1,7 @@
 {
   "name": "deploy-certificate-to-tencent-cloud",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "main": "index.js",
-  "repository": "https://github.com/linrongda/deploy-certificate-to-tencent-cloud.git",
-  "private": true,
   "dependencies": {
     "@actions/core": "^1.10.1",
     "tencentcloud-sdk-nodejs": "^4.1.75"

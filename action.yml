@@ -3,6 +3,7 @@ description: Deploy SSL certificate to Tencent Cloud.
 branding:
   icon: lock
   color: blue
+
 inputs:
   secret-id:
     description: The SecretId used to authenticate with Tencent Cloud.
@@ -16,9 +17,13 @@ inputs:
   key-file:
     description: The file path of the PEM private key file.
     required: true
-  cdn-domains:
-    description: Newline-separated list of hostnames (domains) within the site to apply the certificate to.
+  domains:
+    description: |
+      Each line contains domains separated by spaces.
+      If a line begins with a Zone ID (starts with `zone-`) the remainder of that line are EdgeOne targets for that zone.
+      Otherwise tokens are treated as CDN domains.
     required: true
+
 runs:
-  using: node16
+  using: node20
   main: bootstrap.js

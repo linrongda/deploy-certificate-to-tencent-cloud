@@ -1,6 +1,9 @@
 # GitHub Action — Deploy SSL certificate to Tencent Cloud
 
 ## Usage
+
+### Example Workflow
+
 ```yaml
 jobs:
   deploy-to-tencent-cloud:
@@ -14,19 +17,29 @@ jobs:
           ref: ${{ github.ref }}
 
       - name: Deploy cert to Tencent Cloud
-        uses: linrongda/deploy-certificate-to-tencent-cloud@v1
+        uses: linrongda/deploy-certificate-to-tencent-cloud@v2
         with:
           secret-id: ${{ secrets.TENCENTCLOUD_SECRET_ID }}
           secret-key: ${{ secrets.TENCENTCLOUD_SECRET_KEY }}
           fullchain-file: ${{ env.FILE_FULLCHAIN }}
           key-file: ${{ env.FILE_KEY }}
           # each domain represent an old certificate
-          cdn-domains: |
-            cdn1.example.com
-            cdn2.example.com
+          domains: |
+            cdn1.example.com cdn2.example.com
+            zone-XXXX eo1.example.com eo2.example.com
 ```
 
+### Tips:
+
+Each line contains domains separated by spaces.
+
+If a line begins with a Zone ID (starts with `zone-`) the remainder of that line are EdgeOne targets for that zone.
+Otherwise tokens are treated as CDN domains.
+
 ## Permissions
+
 Ensure the API credentials have permissions for:
-- QcloudSSLFullAccess
-- QcloudCDNFullAccess
+
+- `QcloudSSLFullAccess`
+- `QcloudCDNFullAccess` (If used)
+- `QcloudTEOFullAccess` (If used)
