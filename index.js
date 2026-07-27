@@ -301,7 +301,7 @@ async function queryEoDomainCerts(eoEntries) {
         Filters: [
           {
             Name: 'domain-name',
-            Value: domains,
+            Values: domains,
           },
         ],
       };
